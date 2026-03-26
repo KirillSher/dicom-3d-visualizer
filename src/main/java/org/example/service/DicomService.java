@@ -36,13 +36,11 @@ public class DicomService {
 
             double sliceLocation = parseDouble(getTag(dicomText, "0020,1041"));
             String orientation = getTag(dicomText, "0020,0037");
-            double thickness = parseDouble(getTag(dicomText, "0018,0050"));
 
             slices.add(new DicomSlice(
                     file,
                     sliceLocation,
                     orientation,
-                    thickness,
                     img
             ));
         }

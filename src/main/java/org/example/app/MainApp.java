@@ -1,7 +1,6 @@
 package org.example.app;
 
 import ij.ImagePlus;
-import ij.process.ImageProcessor;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
@@ -13,13 +12,10 @@ import javafx.stage.Stage;
 import org.example.controller.SeriesController;
 import org.example.model.DicomSlice;
 import org.example.opencv.MatConverter;
-import org.example.opencv.OpenCVFilters;
-import org.example.opencv.OpenCVUtils;
 import org.example.util.ImageConverter;
 import org.opencv.core.Core;
-import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.opencv.core.Scalar;
+import org.opencv.imgproc.Imgproc;
 
 import java.io.File;
 
@@ -41,9 +37,8 @@ public class MainApp extends Application {
     private final ImageView processedView = new ImageView();
 
     private final Slider sliceSlider = new Slider();
-    private final Slider thresholdMinSlider = new Slider(0, 255, 50);
-    private final Slider thresholdMaxSlider = new Slider(0, 255, 200);
-    private final Slider blurGaussianSlider = new Slider(0, 20, 1);
+    private final Slider thresholdMinSlider = new Slider(0, 255, 0);
+    private final Slider thresholdMaxSlider = new Slider(0, 255, 255);
 
     private final TilePane sliceTilePane = new TilePane();
     private final ScrollPane sliceScrollPane = new ScrollPane(sliceTilePane);
@@ -54,10 +49,7 @@ public class MainApp extends Application {
 
     private final SeriesController controller = new SeriesController();
 
-    private final String DATA_PATH = "./src/main/resources/mri/media";
-
-    private double thresholdMinValue = 0;
-    private double thresholdMaxValue = 0;
+//    private final String DATA_PATH = "./src/main/resources/mri/media";
 
     @Override
     public void start(Stage stage) {
@@ -85,9 +77,8 @@ public class MainApp extends Application {
         box.setPadding(new Insets(10));
         box.setPrefWidth(160);
 
-        Label thresholdMinLabel = new Label("Threshold Min: 50");
-        Label thresholdMaxLabel = new Label("Threshold Max: 200");
-        Label blurGaussianLabel = new Label("blurGaussian: 1");
+        Label thresholdMinLabel = new Label("Threshold Min: 0");
+        Label thresholdMaxLabel = new Label("Threshold Max: 255");
 
         thresholdMinSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
 
@@ -111,28 +102,26 @@ public class MainApp extends Application {
             updateProcessedImage();
         });
 
-        blurGaussianSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
-            blurGaussianLabel.setText("blurGaussian: " + String.format("%.1f", newVal.doubleValue()));
-            updateProcessedImage();
-        });
-
         box.getChildren().addAll(
                 thresholdMinLabel,
                 thresholdMinSlider,
                 thresholdMaxLabel,
-                thresholdMaxSlider,
-                blurGaussianLabel,
-                blurGaussianSlider
+                thresholdMaxSlider
         );
         return box;
     }
 
     private HBox createImagesPanel() {
         HBox box = new HBox(10);
+
         originalView.setFitWidth(350);
         originalView.setFitHeight(350);
+        originalView.setPreserveRatio(true);
+
         processedView.setFitWidth(350);
         processedView.setFitHeight(350);
+        processedView.setPreserveRatio(true);
+
         box.getChildren().addAll(originalView, processedView);
         return box;
     }
@@ -182,11 +171,11 @@ public class MainApp extends Application {
     }
 
     private void loadSeriesFolders() {
-        File folder = new File(DATA_PATH);
+        File folder = new File("./src/main/resources/mri/media");
         File[] dirs = folder.listFiles(File::isDirectory);
         if (dirs == null || dirs.length == 0) return;
 
-        // Загружаем первую серию по умолчанию
+        // Загружаем определенный source
         loadSeries(dirs[2]);
     }
 
@@ -214,19 +203,19 @@ public class MainApp extends Application {
             sliceTilePane.getChildren().add(iv);
         }
 
-        // Настройка слайдера динамически
+        // Настройка слайдера
         sliceSlider.setMin(0);
         sliceSlider.setMax(sliceCount - 1);
         sliceSlider.setValue(0);
 
-        thresholdMinSlider.setMin(controller.getSeriesMin());
-        thresholdMinSlider.setMax(controller.getSeriesMax());
+        thresholdMinSlider.setMin(0);
+        thresholdMinSlider.setMax(255);
 
-        thresholdMaxSlider.setMin(controller.getSeriesMin());
-        thresholdMaxSlider.setMax(controller.getSeriesMax());
+        thresholdMaxSlider.setMin(0);
+        thresholdMaxSlider.setMax(255);
 
-        thresholdMinSlider.setValue(controller.getSeriesMin());
-        thresholdMaxSlider.setValue(controller.getSeriesMax());
+        thresholdMinSlider.setValue(0);
+        thresholdMaxSlider.setValue(255);
 
         showSlice(0);
     }
@@ -236,7 +225,6 @@ public class MainApp extends Application {
         if (slice == null) return;
 
         originalView.setImage(controller.getSliceImage(index));
-//        processedView.setImage(controller.getSliceImage(index));
 
         updateProcessedImage();
 
@@ -246,7 +234,6 @@ public class MainApp extends Application {
     }
 
     private void updateProcessedImage() {
-
         int index = (int) sliceSlider.getValue();
         DicomSlice slice = controller.getSlice(index);
         if (slice == null) return;
@@ -255,41 +242,27 @@ public class MainApp extends Application {
         if (imp == null) return;
 
         try {
-
-            Mat mat16 = OpenCVUtils.imagePlusToMat(imp);
+            Mat mat = slice.getMat8();
 
             double minVal = thresholdMinSlider.getValue();
             double maxVal = thresholdMaxSlider.getValue();
 
-            if (maxVal <= minVal) return;
-
-            // Gaussian
-            double blurVal = blurGaussianSlider.getValue();
-            if (blurVal > 0) {
-                mat16 = OpenCVFilters.gaussianBlur(mat16, blurVal);
+            if (maxVal <= minVal) {
+                processedView.setImage(null);
+                return;
             }
 
-            // Median
-            mat16 = OpenCVFilters.medianFilter(mat16, 3);
+            Mat result = mat.clone();
 
-            Mat windowed = new Mat();
+            // Полосовой фильтр
+            Imgproc.threshold(result, result, minVal, 255, Imgproc.THRESH_TOZERO);
+            Imgproc.threshold(result, result, maxVal, 255, Imgproc.THRESH_TOZERO_INV);
 
-            double scale = 65535.0 / (maxVal - minVal);
-            double shift = -minVal * scale;
-
-            mat16.convertTo(windowed, CvType.CV_16U, scale, shift);
-
-            Core.min(windowed, new Scalar(65535), windowed);
-            Core.max(windowed, new Scalar(0), windowed);
-
-            Image fxImage = MatConverter.toFXImage(windowed);
-
-            if (fxImage != null) {
-                processedView.setImage(fxImage);
-            }
+            Image fxImage = MatConverter.toFXImage(result);
+            if (fxImage != null) processedView.setImage(fxImage);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Error processing image: " + e.getMessage());
         }
     }
 

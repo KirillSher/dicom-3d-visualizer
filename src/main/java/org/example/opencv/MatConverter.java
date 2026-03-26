@@ -5,32 +5,21 @@ import javafx.scene.image.Image;
 import org.opencv.core.Mat;
 
 import java.awt.image.BufferedImage;
-import java.awt.image.DataBufferUShort;
+import java.awt.image.DataBufferByte;
 
 public class MatConverter {
 
     public static Image toFXImage(Mat mat) {
 
-        Mat normalized = new Mat();
+        int width = mat.cols();
+        int height = mat.rows();
 
-        org.opencv.core.Core.normalize(
-                mat,
-                normalized,
-                0,
-                65535,
-                org.opencv.core.Core.NORM_MINMAX
-        );
+        // 👉 8-bit grayscale
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
 
-        int width = normalized.cols();
-        int height = normalized.rows();
+        byte[] data = ((DataBufferByte) img.getRaster().getDataBuffer()).getData();
 
-        BufferedImage img =
-                new BufferedImage(width, height, BufferedImage.TYPE_USHORT_GRAY);
-
-        short[] data =
-                ((DataBufferUShort) img.getRaster().getDataBuffer()).getData();
-
-        normalized.get(0, 0, data);
+        mat.get(0, 0, data);
 
         return SwingFXUtils.toFXImage(img, null);
     }
