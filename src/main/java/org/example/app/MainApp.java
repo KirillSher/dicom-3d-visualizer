@@ -4,6 +4,7 @@ import ij.ImagePlus;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -12,12 +13,13 @@ import javafx.stage.Stage;
 import org.example.controller.SeriesController;
 import org.example.model.DicomSlice;
 import org.example.opencv.MatConverter;
+import org.example.ui.PolygonDrawer;
 import org.example.util.ImageConverter;
-import org.opencv.core.Core;
-import org.opencv.core.Mat;
+import org.opencv.core.*;
 import org.opencv.imgproc.Imgproc;
 
 import java.io.File;
+import java.util.List;
 
 public class MainApp extends Application {
 
@@ -49,7 +51,8 @@ public class MainApp extends Application {
 
     private final SeriesController controller = new SeriesController();
 
-//    private final String DATA_PATH = "./src/main/resources/mri/media";
+    private PolygonDrawer drawer;
+    private ToggleButton drawToggle;
 
     @Override
     public void start(Stage stage) {
@@ -81,32 +84,93 @@ public class MainApp extends Application {
         Label thresholdMaxLabel = new Label("Threshold Max: 255");
 
         thresholdMinSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
-
             if (newVal.doubleValue() > thresholdMaxSlider.getValue()) {
                 thresholdMinSlider.setValue(thresholdMaxSlider.getValue());
                 return;
             }
-
             thresholdMinLabel.setText("Threshold Min: " + newVal.intValue());
             updateProcessedImage();
+            // При изменении фильтра сбрасываем полигон и выключаем режим рисования
+            if (drawer != null) {
+                drawer.clear();
+                drawer.setDrawingEnabled(false);
+            }
+            resetDrawingUI();
         });
 
         thresholdMaxSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
-
             if (newVal.doubleValue() < thresholdMinSlider.getValue()) {
                 thresholdMaxSlider.setValue(thresholdMinSlider.getValue());
                 return;
             }
-
             thresholdMaxLabel.setText("Threshold Max: " + newVal.intValue());
             updateProcessedImage();
+            // При изменении фильтра сбрасываем полигон и выключаем режим рисования
+            if (drawer != null) {
+                drawer.clear();
+                drawer.setDrawingEnabled(false);
+            }
+            resetDrawingUI();
         });
+
+        // Создаем ToggleButton для режима рисования
+        ToggleButton drawToggle = new ToggleButton("Рисование: ВЫКЛ");
+        Button clearPolygonBtn = new Button("Сбросить полигон");
+        Button applyMaskBtn = new Button("Применить маску");
+
+        // Toggle логика
+        drawToggle.setOnAction(e -> {
+            boolean enabled = drawToggle.isSelected();
+
+            if (drawer != null) {
+                drawer.setDrawingEnabled(enabled);
+            }
+
+            if (enabled) {
+                drawToggle.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
+                drawToggle.setText("Рисование: ВКЛ");
+            } else {
+                drawToggle.setStyle("");
+                drawToggle.setText("Рисование: ВЫКЛ");
+            }
+        });
+        // Сброс
+        clearPolygonBtn.setOnAction(e -> {
+            if (drawer != null) {
+                drawer.clear();
+                drawer.setDrawingEnabled(false);
+                resetDrawingUI();
+                System.out.println("Полигон сброшен");
+            }
+        });
+
+        // Применить маску
+        applyMaskBtn.setOnAction(e -> {
+            if (drawer != null && drawer.isClosed()) {
+                applyMaskToImage();
+                drawer.clear();
+                resetDrawingUI();
+                System.out.println("Маска применена");
+            } else if (drawer != null) {
+                System.out.println("Сначала замкните полигон!");
+            }
+        });
+
+        // Добавляем разделитель
+        Separator separator = new Separator();
+
+        // Сохраняем кнопку в поле класса для доступа из других методов
+        this.drawToggle = drawToggle;
 
         box.getChildren().addAll(
                 thresholdMinLabel,
                 thresholdMinSlider,
                 thresholdMaxLabel,
-                thresholdMaxSlider
+                thresholdMaxSlider,
+                separator,
+                drawToggle,
+                clearPolygonBtn,
+                applyMaskBtn
         );
         return box;
     }
@@ -114,15 +178,46 @@ public class MainApp extends Application {
     private HBox createImagesPanel() {
         HBox box = new HBox(10);
 
+        // ORIGINAL
         originalView.setFitWidth(350);
         originalView.setFitHeight(350);
-        originalView.setPreserveRatio(true);
+        originalView.setPreserveRatio(false);
 
+        // PROCESSED
         processedView.setFitWidth(350);
         processedView.setFitHeight(350);
-        processedView.setPreserveRatio(true);
+        processedView.setPreserveRatio(false);
 
-        box.getChildren().addAll(originalView, processedView);
+        Canvas canvas = new Canvas();
+
+        // ❗ ВАЖНО: подгоняем Canvas под РЕАЛЬНОЕ изображение
+        processedView.imageProperty().addListener((obs, oldImg, newImg) -> {
+            if (newImg != null) {
+                canvas.setWidth(newImg.getWidth());
+                canvas.setHeight(newImg.getHeight());
+            }
+        });
+
+        // ❗ ВАЖНО: НЕ центр, а левый верх
+        StackPane processedStack = new StackPane();
+        processedStack.getChildren().addAll(processedView, canvas);
+
+        StackPane.setAlignment(processedView, javafx.geometry.Pos.TOP_LEFT);
+        StackPane.setAlignment(canvas, javafx.geometry.Pos.TOP_LEFT);
+
+        // ❗ фиксируем размер контейнера
+        processedStack.setPrefSize(350, 350);
+        processedStack.setMinSize(350, 350);
+        processedStack.setMaxSize(350, 350);
+
+        drawer = new PolygonDrawer(canvas, processedView);
+
+        drawer.setOnPolygonClosed(() -> {
+            System.out.println("Полигон замкнут!");
+        });
+
+        box.getChildren().addAll(originalView, processedStack);
+
         return box;
     }
 
@@ -221,6 +316,12 @@ public class MainApp extends Application {
     }
 
     private void showSlice(int index) {
+        if (drawer != null) {
+            drawer.clear();
+            drawer.setDrawingEnabled(false);
+        }
+        resetDrawingUI();
+
         DicomSlice slice = controller.getSlice(index);
         if (slice == null) return;
 
@@ -263,6 +364,80 @@ public class MainApp extends Application {
 
         } catch (Exception e) {
             System.err.println("Error processing image: " + e.getMessage());
+        }
+    }
+
+    private void applyMaskToImage() {
+        int index = (int) sliceSlider.getValue();
+        DicomSlice slice = controller.getSlice(index);
+        if (slice == null) return;
+
+        try {
+            // Получаем оригинальное изображение
+            Mat originalMat = slice.getMat8();
+
+            // Получаем обработанное изображение
+            Mat processedMat = originalMat.clone();
+
+            // Применяем полосовой фильтр (как в updateProcessedImage)
+            double minVal = thresholdMinSlider.getValue();
+            double maxVal = thresholdMaxSlider.getValue();
+
+            Imgproc.threshold(processedMat, processedMat, minVal, 255, Imgproc.THRESH_TOZERO);
+            Imgproc.threshold(processedMat, processedMat, maxVal, 255, Imgproc.THRESH_TOZERO_INV);
+
+            // Получаем точки полигона в координатах изображения
+            List<org.opencv.core.Point> imagePoints = drawer.getImagePoints(
+                    processedMat.width(),
+                    processedMat.height()
+            );
+
+            System.out.println(imagePoints);
+
+            if (imagePoints.size() < 3) {
+                System.out.println("Нужно минимум 3 точки для полигона");
+                return;
+            }
+
+            // Создаем маску
+            Mat mask = Mat.zeros(processedMat.size(), CvType.CV_8UC1);
+
+            // Конвертируем точки в MatOfPoint
+            MatOfPoint polygon = new MatOfPoint();
+            polygon.fromList(imagePoints);
+
+            // Создаем список полигонов
+            List<MatOfPoint> polygons = List.of(polygon);
+
+            // Заполняем полигон белым цветом (255)
+            Imgproc.fillPoly(mask, polygons, new Scalar(255));
+
+            // Применяем маску: оставляем только то, что внутри полигона
+            Mat result = new Mat();
+            processedMat.copyTo(result, mask);
+            processedMat.release();
+
+            // Показываем результат
+            Image fxImage = MatConverter.toFXImage(result);
+            if (fxImage != null) {
+                processedView.setImage(fxImage);
+            }
+
+            // Освобождаем ресурсы
+            result.release();
+            mask.release();
+
+        } catch (Exception e) {
+            System.err.println("Ошибка при применении маски: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void resetDrawingUI() {
+        if (drawToggle != null) {
+            drawToggle.setSelected(false);
+            drawToggle.setStyle("");
+            drawToggle.setText("Рисование: ВЫКЛ");
         }
     }
 
