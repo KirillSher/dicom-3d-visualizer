@@ -18,7 +18,6 @@ public class OpenCVUtils {
         Mat mat16 = new Mat(height, width, CvType.CV_16U);
         mat16.put(0, 0, pixels16);
 
-        // 👉 ВОТ КЛЮЧЕВОЕ
         Mat mat8 = new Mat();
         Core.normalize(mat16, mat8, 0, 255, Core.NORM_MINMAX, CvType.CV_8U);
 

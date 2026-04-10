@@ -1,6 +1,5 @@
 package org.example.app;
 
-import ij.ImagePlus;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
@@ -53,6 +52,7 @@ public class MainApp extends Application {
 
     private PolygonDrawer drawer;
     private ToggleButton drawToggle;
+    private ComboBox<String> displayModeBox;
 
     @Override
     public void start(Stage stage) {
@@ -80,15 +80,15 @@ public class MainApp extends Application {
         box.setPadding(new Insets(10));
         box.setPrefWidth(160);
 
-        Label thresholdMinLabel = new Label("Threshold Min: 0");
-        Label thresholdMaxLabel = new Label("Threshold Max: 255");
+        Label thresholdMinLabel = new Label("IntensityRangeMin: 0");
+        Label thresholdMaxLabel = new Label("IntensityRangeMax: 255");
 
         thresholdMinSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             if (newVal.doubleValue() > thresholdMaxSlider.getValue()) {
                 thresholdMinSlider.setValue(thresholdMaxSlider.getValue());
                 return;
             }
-            thresholdMinLabel.setText("Threshold Min: " + newVal.intValue());
+            thresholdMinLabel.setText("IntensityRangeMin: " + newVal.intValue());
             updateProcessedImage();
             // При изменении фильтра сбрасываем полигон и выключаем режим рисования
             if (drawer != null) {
@@ -103,7 +103,7 @@ public class MainApp extends Application {
                 thresholdMaxSlider.setValue(thresholdMinSlider.getValue());
                 return;
             }
-            thresholdMaxLabel.setText("Threshold Max: " + newVal.intValue());
+            thresholdMaxLabel.setText("IntensityRangeMax: " + newVal.intValue());
             updateProcessedImage();
             // При изменении фильтра сбрасываем полигон и выключаем режим рисования
             if (drawer != null) {
@@ -156,21 +156,45 @@ public class MainApp extends Application {
             }
         });
 
+        Label modeLabel = new Label("Display Mode");
+
+        displayModeBox = new ComboBox<>();
+        displayModeBox.getItems().addAll(
+                "Grayscale",
+                "Tissue coloring"
+        );
+
+        displayModeBox.setValue("Grayscale");
+
+        displayModeBox.setOnAction(e -> updateProcessedImage());
+
         // Добавляем разделитель
         Separator separator = new Separator();
 
         // Сохраняем кнопку в поле класса для доступа из других методов
         this.drawToggle = drawToggle;
 
+        Button clearMaskBtn = new Button("Сбросить маску");
+        clearMaskBtn.setOnAction(e -> {
+            controller.setMask(null);
+            updateProcessedImage();
+            System.out.println("Маска сброшена");
+        });
+
         box.getChildren().addAll(
                 thresholdMinLabel,
                 thresholdMinSlider,
                 thresholdMaxLabel,
                 thresholdMaxSlider,
+
+                modeLabel,
+                displayModeBox,
+
                 separator,
                 drawToggle,
                 clearPolygonBtn,
-                applyMaskBtn
+                applyMaskBtn,
+                clearMaskBtn
         );
         return box;
     }
@@ -269,7 +293,9 @@ public class MainApp extends Application {
         File folder = new File("./src/main/resources/mri/media");
         File[] dirs = folder.listFiles(File::isDirectory);
         if (dirs == null || dirs.length == 0) return;
-
+        for (int i = 0; i < 5; i++) {
+            System.out.println(dirs[i]);
+        }
         // Загружаем определенный source
         loadSeries(dirs[2]);
     }
@@ -316,18 +342,17 @@ public class MainApp extends Application {
     }
 
     private void showSlice(int index) {
+        // НЕ сбрасываем маску полностью
         if (drawer != null) {
-            drawer.clear();
             drawer.setDrawingEnabled(false);
         }
-        resetDrawingUI();
+        resetDrawingUI(); // только UI кнопки
 
         DicomSlice slice = controller.getSlice(index);
         if (slice == null) return;
 
         originalView.setImage(controller.getSliceImage(index));
-
-        updateProcessedImage();
+        updateProcessedImage(); // здесь будет применяться сохранённая маска
 
         fileNameLabel.setText("File: " + slice.getFile().getName());
         sliceLocationLabel.setText("Slice Location: " + slice.getSliceLocation());
@@ -339,32 +364,87 @@ public class MainApp extends Application {
         DicomSlice slice = controller.getSlice(index);
         if (slice == null) return;
 
-        ImagePlus imp = slice.getImage();
-        if (imp == null) return;
+        Mat original = slice.getMat8();
+        double minVal = thresholdMinSlider.getValue();
+        double maxVal = thresholdMaxSlider.getValue();
 
-        try {
-            Mat mat = slice.getMat8();
+        // Конвертация в 8-бит для отображения
+        Mat temp = new Mat();
+        original.convertTo(temp, CvType.CV_8U);
 
-            double minVal = thresholdMinSlider.getValue();
-            double maxVal = thresholdMaxSlider.getValue();
+        // Создаем цветное изображение (по умолчанию grayscale)
+        Mat colorResult = new Mat();
+        Imgproc.cvtColor(temp, colorResult, Imgproc.COLOR_GRAY2BGR);
 
-            if (maxVal <= minVal) {
-                processedView.setImage(null);
-                return;
-            }
+        // Проверяем режим отображения
+        String mode = displayModeBox.getValue();
+        if ("Tissue coloring".equals(mode)) {
+            // Нормализация в диапазон 0-255
+            Mat norm = new Mat();
+            original.convertTo(norm, CvType.CV_32F);
+            Core.subtract(norm, new Scalar(minVal), norm);
+            Core.divide(norm, new Scalar(Math.max(maxVal - minVal, 1)), norm);
+            Core.multiply(norm, new Scalar(255), norm);
+            Core.min(norm, new Scalar(255), norm);
+            Core.max(norm, new Scalar(0), norm);
+            norm.convertTo(norm, CvType.CV_8U);
 
-            Mat result = mat.clone();
+            // Создаем маски для тканей
+            Mat maskAir = new Mat();
+            Mat maskLung = new Mat();
+            Mat maskFat = new Mat();
+            Mat maskTissue = new Mat();
+            Mat maskBone = new Mat();
 
-            // Полосовой фильтр
-            Imgproc.threshold(result, result, minVal, 255, Imgproc.THRESH_TOZERO);
-            Imgproc.threshold(result, result, maxVal, 255, Imgproc.THRESH_TOZERO_INV);
+            Core.inRange(norm, new Scalar(0), new Scalar(30), maskAir);
+            Core.inRange(norm, new Scalar(31), new Scalar(80), maskLung);
+            Core.inRange(norm, new Scalar(81), new Scalar(130), maskFat);
+            Core.inRange(norm, new Scalar(131), new Scalar(180), maskTissue);
+            Core.inRange(norm, new Scalar(181), new Scalar(255), maskBone);
 
-            Image fxImage = MatConverter.toFXImage(result);
-            if (fxImage != null) processedView.setImage(fxImage);
+            // Цвета тканей
+            colorResult.setTo(new Scalar(0, 0, 0), maskAir);
+            colorResult.setTo(new Scalar(255, 200, 100), maskLung);
+            colorResult.setTo(new Scalar(200, 230, 255), maskFat);
+            colorResult.setTo(new Scalar(80, 80, 180), maskTissue);
+            colorResult.setTo(new Scalar(255, 255, 255), maskBone);
 
-        } catch (Exception e) {
-            System.err.println("Error processing image: " + e.getMessage());
+            // Освобождаем временные матрицы
+            norm.release();
+            maskAir.release();
+            maskLung.release();
+            maskFat.release();
+            maskTissue.release();
+            maskBone.release();
         }
+
+        Mat maskRange = new Mat();
+        Core.inRange(temp, new Scalar(minVal), new Scalar(maxVal), maskRange);
+
+        Mat filtered = new Mat();
+        colorResult.copyTo(filtered, maskRange);
+
+        temp.release();
+
+        // ✅ Применяем пользовательскую маску (полигон) правильно
+        Mat currentMask = controller.getCurrentMask();
+        Mat finalResult = new Mat();
+        if (currentMask != null && !currentMask.empty()) {
+            filtered.copyTo(finalResult, currentMask);
+        } else {
+            finalResult = filtered.clone();
+        }
+
+        // Отображаем в JavaFX
+        Image fxImage = MatConverter.toFXImageColor(finalResult);
+        processedView.setImage(fxImage);
+
+        // Освобождаем ресурсы
+        maskRange.release();
+        filtered.release();
+
+        finalResult.release();
+        colorResult.release();
     }
 
     private void applyMaskToImage() {
@@ -373,23 +453,11 @@ public class MainApp extends Application {
         if (slice == null) return;
 
         try {
-            // Получаем оригинальное изображение
-            Mat originalMat = slice.getMat8();
-
-            // Получаем обработанное изображение
-            Mat processedMat = originalMat.clone();
-
-            // Применяем полосовой фильтр (как в updateProcessedImage)
-            double minVal = thresholdMinSlider.getValue();
-            double maxVal = thresholdMaxSlider.getValue();
-
-            Imgproc.threshold(processedMat, processedMat, minVal, 255, Imgproc.THRESH_TOZERO);
-            Imgproc.threshold(processedMat, processedMat, maxVal, 255, Imgproc.THRESH_TOZERO_INV);
-
             // Получаем точки полигона в координатах изображения
+            Mat originalMat = slice.getMat8();
             List<org.opencv.core.Point> imagePoints = drawer.getImagePoints(
-                    processedMat.width(),
-                    processedMat.height()
+                    originalMat.width(),
+                    originalMat.height()
             );
 
             System.out.println(imagePoints);
@@ -399,8 +467,8 @@ public class MainApp extends Application {
                 return;
             }
 
-            // Создаем маску
-            Mat mask = Mat.zeros(processedMat.size(), CvType.CV_8UC1);
+            // Создаем маску (только маску, без применения фильтра!)
+            Mat mask = Mat.zeros(originalMat.size(), CvType.CV_8UC1);
 
             // Конвертируем точки в MatOfPoint
             MatOfPoint polygon = new MatOfPoint();
@@ -412,20 +480,19 @@ public class MainApp extends Application {
             // Заполняем полигон белым цветом (255)
             Imgproc.fillPoly(mask, polygons, new Scalar(255));
 
-            // Применяем маску: оставляем только то, что внутри полигона
-            Mat result = new Mat();
-            processedMat.copyTo(result, mask);
-            processedMat.release();
+            // Сохраняем маску в контроллер
+            controller.setMask(mask);
 
-            // Показываем результат
-            Image fxImage = MatConverter.toFXImage(result);
-            if (fxImage != null) {
-                processedView.setImage(fxImage);
+            System.out.println("Маска сохранена, размер: " + mask.width() + "x" + mask.height());
+
+            // Очищаем UI рисования
+            if (drawer != null) {
+                drawer.clear();
             }
+            resetDrawingUI();
 
-            // Освобождаем ресурсы
-            result.release();
-            mask.release();
+            // Обновляем отображение (применится и фильтр, и маска)
+            updateProcessedImage();
 
         } catch (Exception e) {
             System.err.println("Ошибка при применении маски: " + e.getMessage());
