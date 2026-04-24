@@ -30,6 +30,8 @@ public class DicomService {
 
             Object info = img.getProperty("Info");
 
+//            System.out.println(info);
+
             if (info == null) continue;
 
             String dicomText = info.toString();
@@ -37,12 +39,42 @@ public class DicomService {
             double sliceLocation = parseDouble(getTag(dicomText, "0020,1041"));
             String orientation = getTag(dicomText, "0020,0037");
 
+            // Pixel Spacing (0028,0030) -> "0.5\0.5"
+            String pixelSpacingStr = getTag(dicomText, "0028,0030");
+
+            double pixelSpacingX = 1.0;
+            double pixelSpacingY = 1.0;
+
+            if (pixelSpacingStr != null && pixelSpacingStr.contains("\\")) {
+                String[] parts = pixelSpacingStr.split("\\\\");
+                if (parts.length == 2) {
+                    pixelSpacingY = parseDouble(parts[0]); // обычно Y
+                    pixelSpacingX = parseDouble(parts[1]); // обычно X
+                }
+            }
+
+            // Slice Thickness (0018,0050)
+            double sliceThickness = parseDouble(getTag(dicomText, "0018,0050"));
+
+            // fallback если нет
+            if (sliceThickness == Double.MAX_VALUE) {
+                sliceThickness = 1.0;
+            }
+
             slices.add(new DicomSlice(
                     file,
                     sliceLocation,
                     orientation,
-                    img
+                    img,
+                    pixelSpacingX,
+                    pixelSpacingY,
+                    sliceThickness
             ));
+
+//            System.out.println("Spacing: "
+//                    + pixelSpacingX + " x "
+//                    + pixelSpacingY + " x "
+//                    + sliceThickness);
         }
 
         // сортировка срезов

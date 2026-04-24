@@ -12,6 +12,7 @@ import javafx.stage.Stage;
 import org.example.controller.SeriesController;
 import org.example.model.DicomSlice;
 import org.example.opencv.MatConverter;
+import org.example.threed.MarchingCubesVolumeRenderer;
 import org.example.ui.PolygonDrawer;
 import org.example.util.ImageConverter;
 import org.opencv.core.*;
@@ -54,8 +55,12 @@ public class MainApp extends Application {
     private ToggleButton drawToggle;
     private ComboBox<String> displayModeBox;
 
+    private Stage primaryStage;
+
     @Override
     public void start(Stage stage) {
+
+        this.primaryStage = stage;
 
         VBox slidersBox = createSlidersPanel();
         HBox imagesBox = createImagesPanel();
@@ -181,6 +186,14 @@ public class MainApp extends Application {
             System.out.println("Маска сброшена");
         });
 
+        Button show3DButton = new Button("Показать 3D модель");
+        show3DButton.setOnAction(e -> {
+            if (controller.getCurrentSeries() != null) {
+                MarchingCubesVolumeRenderer renderer = new MarchingCubesVolumeRenderer();
+                renderer.showVolume(primaryStage, controller.getCurrentSeries());
+            }
+        });
+
         box.getChildren().addAll(
                 thresholdMinLabel,
                 thresholdMinSlider,
@@ -194,7 +207,10 @@ public class MainApp extends Application {
                 drawToggle,
                 clearPolygonBtn,
                 applyMaskBtn,
-                clearMaskBtn
+                clearMaskBtn,
+
+                new Separator(),
+                show3DButton
         );
         return box;
     }

@@ -35,10 +35,5 @@ build/
 ### Mac OS ###
 .DS_Store
 
-# Java классы
-src/main/java/org/example/DicomInfo.java
-src/main/java/org/example/DicomUtils.java
-src/main/java/org/example/MainApp.java
-
 # MRI папка
 src/main/resources/mri/

@@ -47,4 +47,8 @@ public class SeriesController {
     public Mat getCurrentMask() {
         return currentMask;
     }
+
+    public DicomSeries getCurrentSeries() {
+        return currentSeries;
+    }
 }
